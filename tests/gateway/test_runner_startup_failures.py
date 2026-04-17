@@ -202,3 +202,127 @@ async def test_start_gateway_replace_force_uses_terminate_pid(monkeypatch, tmp_p
 
     assert ok is True
     assert calls == [(42, False), (42, True)]
+
+
+class _CustomTestAdapter(BasePlatformAdapter):
+    """Mock adapter for testing platform_class dynamic loading."""
+
+    def __init__(self, config):
+        super().__init__(config, Platform.TELEGRAM)
+        self.config_received = config
+
+    async def connect(self) -> bool:
+        return True
+
+    async def disconnect(self) -> None:
+        self._mark_disconnected()
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None):
+        raise NotImplementedError
+
+    async def get_chat_info(self, chat_id):
+        return {"id": chat_id}
+
+
+class TestPlatformClassConfig:
+    """Tests for platform_class field allowing custom adapter loading."""
+
+    def test_platform_class_in_config_roundtrip(self):
+        """platform_class should persist through to_dict/from_dict."""
+        pc = PlatformConfig(
+            enabled=True,
+            token="test-token",
+            platform_class="my_custom.adapters.MyAdapter",
+        )
+        d = pc.to_dict()
+        restored = PlatformConfig.from_dict(d)
+
+        assert restored.platform_class == "my_custom.adapters.MyAdapter"
+
+    def test_platform_class_none_by_default(self):
+        """platform_class should be None when not set."""
+        pc = PlatformConfig(enabled=True, token="test-token")
+        assert pc.platform_class is None
+
+        d = pc.to_dict()
+        restored = PlatformConfig.from_dict(d)
+        assert restored.platform_class is None
+
+    def test_create_adapter_uses_platform_class_when_set(self, tmp_path, monkeypatch):
+        """_create_adapter should use dynamic import when platform_class is set."""
+        import sys
+
+        # Create a mock adapter module
+        mock_adapter_code = '''
+class MockCustomAdapter:
+    def __init__(self, config):
+        self.config = config
+        self.platform = "mock_platform"
+
+    async def connect(self):
+        return True
+
+    async def disconnect(self):
+        pass
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None):
+        pass
+
+    async def get_chat_info(self, chat_id):
+        return {"id": chat_id}
+'''
+
+        # Create a temporary module
+        import types
+        mock_module = types.ModuleType("_mock_custom_adapter")
+        exec(mock_adapter_code, mock_module.__dict__)
+        sys.modules["_mock_custom_adapter"] = mock_module
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        pc = PlatformConfig(
+            enabled=True,
+            token="test-token",
+            platform_class="_mock_custom_adapter.MockCustomAdapter",
+        )
+
+        config = GatewayConfig(
+            platforms={Platform.TELEGRAM: pc},
+            sessions_dir=tmp_path / "sessions",
+        )
+        runner = GatewayRunner(config)
+
+        # Create adapter using the platform_class
+        adapter = runner._create_adapter(Platform.TELEGRAM, pc)
+
+        assert adapter is not None
+        assert type(adapter).__name__ == "MockCustomAdapter"
+        assert adapter.config is pc
+
+        # Cleanup
+        del sys.modules["_mock_custom_adapter"]
+
+    def test_create_adapter_returns_none_on_invalid_platform_class(self, tmp_path, monkeypatch, caplog):
+        """Invalid platform_class should log error and return None."""
+        import logging
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        pc = PlatformConfig(
+            enabled=True,
+            token="test-token",
+            platform_class="nonexistent.module.BadAdapter",
+        )
+
+        config = GatewayConfig(
+            platforms={Platform.TELEGRAM: pc},
+            sessions_dir=tmp_path / "sessions",
+        )
+        runner = GatewayRunner(config)
+
+        adapter = runner._create_adapter(Platform.TELEGRAM, pc)
+
+        assert adapter is None
+        # Should log an error about failed import
+        assert any("Failed to load custom platform adapter" in record.message
+                   for record in caplog.records if record.levelno == logging.ERROR)

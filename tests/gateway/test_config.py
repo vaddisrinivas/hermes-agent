@@ -52,6 +52,38 @@ class TestPlatformConfigRoundtrip:
         assert restored.enabled is False
         assert restored.token is None
 
+    def test_platform_class_roundtrip(self):
+        """platform_class field should be preserved in to_dict/from_dict."""
+        pc = PlatformConfig(
+            enabled=True,
+            token="tok_123",
+            platform_class="my_package.adapters.MyCustomAdapter",
+        )
+        d = pc.to_dict()
+        restored = PlatformConfig.from_dict(d)
+
+        assert restored.platform_class == "my_package.adapters.MyCustomAdapter"
+
+    def test_platform_class_none_by_default(self):
+        """platform_class should be None when not set."""
+        pc = PlatformConfig(enabled=True, token="tok_123")
+        assert pc.platform_class is None
+
+        d = pc.to_dict()
+        restored = PlatformConfig.from_dict(d)
+        assert restored.platform_class is None
+
+    def test_platform_class_in_extra(self):
+        """platform_class should appear in to_dict output when set."""
+        pc = PlatformConfig(
+            enabled=True,
+            token="tok_123",
+            platform_class="custom.module.Adapter",
+        )
+        d = pc.to_dict()
+        assert "platform_class" in d
+        assert d["platform_class"] == "custom.module.Adapter"
+
 
 class TestGetConnectedPlatforms:
     def test_returns_enabled_with_token(self):
