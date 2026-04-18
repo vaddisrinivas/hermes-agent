@@ -2494,11 +2494,23 @@ class GatewayRunner:
         await self._shutdown_event.wait()
     
     def _create_adapter(
-        self, 
-        platform: Platform, 
+        self,
+        platform: Platform,
         config: Any
     ) -> Optional[BasePlatformAdapter]:
         """Create the appropriate adapter for a platform."""
+        # Check for custom platform_class override
+        if hasattr(config, "platform_class") and config.platform_class:
+            import importlib
+            try:
+                module_path, class_name = config.platform_class.rsplit(".", 1)
+                module = importlib.import_module(module_path)
+                adapter_class = getattr(module, class_name)
+                return adapter_class(config)
+            except (ImportError, AttributeError, ValueError) as e:
+                logger.error(f"Failed to load custom platform_class {config.platform_class}: {e}")
+                return None
+
         if hasattr(config, "extra") and isinstance(config.extra, dict):
             config.extra.setdefault(
                 "group_sessions_per_user",

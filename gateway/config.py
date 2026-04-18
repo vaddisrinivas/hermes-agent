@@ -153,7 +153,12 @@ class PlatformConfig:
     # - "first": Only first chunk threads to user's message (default)
     # - "all": All chunks in multi-part replies thread to user's message
     reply_to_mode: str = "first"
-    
+
+    # Custom adapter class (for plugin/third-party platform adapters)
+    # If set, this Python class path will be used instead of the built-in adapter
+    # Example: "my_custom_platforms.CustomAdapter"
+    platform_class: Optional[str] = None
+
     # Platform-specific settings
     extra: Dict[str, Any] = field(default_factory=dict)
     
@@ -163,6 +168,8 @@ class PlatformConfig:
             "extra": self.extra,
             "reply_to_mode": self.reply_to_mode,
         }
+        if self.platform_class:
+            result["platform_class"] = self.platform_class
         if self.token:
             result["token"] = self.token
         if self.api_key:
@@ -183,6 +190,7 @@ class PlatformConfig:
             api_key=data.get("api_key"),
             home_channel=home_channel,
             reply_to_mode=data.get("reply_to_mode", "first"),
+            platform_class=data.get("platform_class"),
             extra=data.get("extra", {}),
         )
 
