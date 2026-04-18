@@ -74,6 +74,35 @@ from tools.browser_tool import cleanup_browser
 
 from hermes_constants import OPENROUTER_BASE_URL
 
+
+# Context manager for approval callback registration (SDK usage pattern)
+from contextlib import contextmanager
+
+@contextmanager
+def _approval_callback_context(session_key: str, callback):
+    """Context manager that registers an approval callback and ensures cleanup.
+
+    Used by AIAgent.run_conversation to manage approval callback lifecycle
+    for SDK usage patterns. Mirrors the gateway's approval pattern.
+    """
+    from tools.approval import (
+        register_gateway_notify,
+        reset_current_session_key,
+        set_current_session_key,
+    )
+    token = set_current_session_key(session_key)
+    register_gateway_notify(session_key, callback)
+    try:
+        yield
+    finally:
+        from tools.approval import (
+            reset_current_session_key as _reset,
+            unregister_gateway_notify,
+        )
+        unregister_gateway_notify(session_key)
+        _reset(token)
+
+
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import build_memory_context_block, sanitize_context
 from agent.retry_utils import jittered_backoff
@@ -641,6 +670,7 @@ class AIAgent:
         interim_assistant_callback: callable = None,
         tool_gen_callback: callable = None,
         status_callback: callable = None,
+        approval_callback: callable = None,
         max_tokens: int = None,
         reasoning_config: Dict[str, Any] = None,
         service_tier: str = None,
@@ -819,8 +849,9 @@ class AIAgent:
         self.interim_assistant_callback = interim_assistant_callback
         self.status_callback = status_callback
         self.tool_gen_callback = tool_gen_callback
+        self.approval_callback = approval_callback
 
-        
+
         # Tool execution state — allows _vprint during tool execution
         # even when stream consumers are registered (no tokens streaming then)
         self._executing_tools = False
@@ -8468,7 +8499,16 @@ class AIAgent:
         # Installed once, transparent when streams are healthy, prevents crash on write.
         _install_safe_stdio()
 
-        # Tag all log records on this thread with the session ID so
+        # Register approval callback if provided (SDK usage pattern).
+        # The context manager handles registration and cleanup automatically.
+        _approval_session_key = self._gateway_session_key or self.session_id
+        _approval_ctx = None
+        if self.approval_callback is not None:
+            _approval_ctx = _approval_callback_context(_approval_session_key, self.approval_callback)
+            _approval_ctx.__enter__()
+
+        try:
+            # Tag all log records on this thread with the session ID so
         # ``hermes logs --session <id>`` can filter a single conversation.
         from hermes_logging import set_session_context
         set_session_context(self.session_id)
@@ -11616,6 +11656,12 @@ class AIAgent:
             logger.warning("on_session_end hook failed: %s", exc)
 
         return result
+
+        finally:
+            # Cleanup approval callback context manager (SDK usage pattern).
+            # Runs even if run_conversation raises or returns early.
+            if _approval_ctx is not None:
+                _approval_ctx.__exit__(None, None, None)
 
     def chat(self, message: str, stream_callback: Optional[callable] = None) -> str:
         """
