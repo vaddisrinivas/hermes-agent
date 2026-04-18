@@ -519,7 +519,7 @@ def _get_approval_config() -> dict:
 
 
 def _get_approval_mode() -> str:
-    """Read the approval mode from config. Returns 'manual', 'smart', or 'off'."""
+    """Read the approval mode from config. Returns 'manual', 'smart', 'off', or 'plugin'."""
     mode = _get_approval_config().get("mode", "manual")
     return _normalize_approval_mode(mode)
 
@@ -704,6 +704,11 @@ def check_all_command_guards(command: str, env_type: str,
     approval_mode = _get_approval_mode()
     if os.getenv("HERMES_YOLO_MODE") or is_current_session_yolo_enabled() or approval_mode == "off":
         return {"approved": True, "message": None}
+
+    # approvals.mode=plugin: delegate approval to pre_tool_call hooks.
+    # Plugins can return {"action": "approve"} to bypass built-in checks.
+    if approval_mode == "plugin":
+        return {"approved": True, "message": None, "plugin_mode": True}
 
     is_cli = os.getenv("HERMES_INTERACTIVE")
     is_gateway = os.getenv("HERMES_GATEWAY_SESSION")

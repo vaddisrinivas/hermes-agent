@@ -740,23 +740,31 @@ def invoke_hook(hook_name: str, **kwargs: Any) -> List[Any]:
 
 
 
-def get_pre_tool_call_block_message(
+def get_pre_tool_call_directive(
     tool_name: str,
     args: Optional[Dict[str, Any]],
     task_id: str = "",
     session_id: str = "",
     tool_call_id: str = "",
-) -> Optional[str]:
-    """Check ``pre_tool_call`` hooks for a blocking directive.
+) -> tuple[Optional[str], Optional[str]]:
+    """Check ``pre_tool_call`` hooks for a blocking or approval directive.
 
     Plugins that need to enforce policy (rate limiting, security
     restrictions, approval workflows) can return::
 
         {"action": "block", "message": "Reason the tool was blocked"}
 
-    from their ``pre_tool_call`` callback.  The first valid block
-    directive wins.  Invalid or irrelevant hook return values are
-    silently ignored so existing observer-only hooks are unaffected.
+    or::
+
+        {"action": "approve", "message": "Optional reason for approval"}
+
+    from their ``pre_tool_call`` callback. The first valid directive wins.
+    Invalid or irrelevant hook return values are silently ignored so existing
+    observer-only hooks are unaffected.
+
+    Returns:
+        A tuple of (directive, message) where directive is "block", "approve",
+        or None, and message is the optional message from the hook.
     """
     hook_results = invoke_hook(
         "pre_tool_call",
@@ -770,13 +778,22 @@ def get_pre_tool_call_block_message(
     for result in hook_results:
         if not isinstance(result, dict):
             continue
-        if result.get("action") != "block":
-            continue
-        message = result.get("message")
-        if isinstance(message, str) and message:
-            return message
+        action = result.get("action")
+        if action in ("block", "approve"):
+            message = result.get("message")
+            return (action, message if isinstance(message, str) else None)
 
-    return None
+    return (None, None)
+
+
+# Backward compatibility alias for existing code that imports the old name.
+def get_pre_tool_call_block_message(*args, **kwargs) -> Optional[str]:
+    """Legacy wrapper - returns the block message or None.
+
+    Deprecated: Use get_pre_tool_call_directive() instead.
+    """
+    directive, message = get_pre_tool_call_directive(*args, **kwargs)
+    return message if directive == "block" else None
 
 
 def get_plugin_context_engine():

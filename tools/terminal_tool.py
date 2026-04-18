@@ -1287,6 +1287,23 @@ def terminal_tool(
         # Skip check if force=True (user has confirmed they want to run it)
         approval_note = None
         if not force:
+            # Check pre_tool_call hooks for approve directive (plugin override).
+            # Plugins can return {"action": "approve"} to bypass the built-in check.
+            try:
+                from hermes_cli.plugins import get_pre_tool_call_directive
+                directive, message = get_pre_tool_call_directive(
+                    tool_name="terminal",
+                    args={"command": command},
+                    task_id=effective_task_id,
+                )
+                if directive == "approve":
+                    force = True  # Skip the built-in dangerous-command check
+                    if message:
+                        approval_note = f"Command approved by plugin: {message}"
+            except Exception:
+                pass
+
+        if not force:
             approval = _check_all_guards(command, env_type)
             if not approval["approved"]:
                 # Check if this is an approval_required (gateway ask mode)
